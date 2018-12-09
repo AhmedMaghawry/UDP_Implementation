@@ -9,8 +9,9 @@
 int getPackets(char * file_path, struct packet * res);
 struct input_server read_input(char * file_path);
 void beginProcess(int num_packs, int sock, struct sockaddr_in clientAddr);
+void sendACK(int next_seq, int sock, struct sockaddr_in addr);
 
-struct packet packets[SEQNUM];
+struct packet packets[SEQNUM] = {0};
 int servSock;
 int clntSock;
 int num_packets_glb;
@@ -29,10 +30,9 @@ int main(int argc, char *argv[]) {
 
 
     struct input_server input = read_input("Server/server.in");
-    packets[SEQNUM] = {0};
 
     /*Main Thread Setup*/
-    servPort = atoi(input.portServer);   /* First arg: local port */
+    servPort = input.portServer;   /* First arg: local port */
 
     /* Create socket for incoming connections */
     if ((servSock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
