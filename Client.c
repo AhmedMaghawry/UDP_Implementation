@@ -4,18 +4,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <printf.h>
 #include "Reliable.h"
 
 void check_index(int base, int next_seq);
-void recieveFileSelectiveR(int sock, struct sockaddr_in servAddr, char * fileName);
-void recieveFileGBN(int sock, struct sockaddr_in servAddr, char * fileName);
+void recieveFileSelectiveR(int sock, struct sockaddr_in servAddr, FILE* fp);
+void stopAndWait(int sock, struct sockaddr_in servAddr, FILE* fp);
 void sendACK(int next_seq, int sock, struct sockaddr_in servAddr);
 struct input_client read_input(char * file_path);
 int fileNameSendAndWait(int sock, struct sockaddr_in servAddr, char * fileNew);
+void gbn(int sock, struct sockaddr_in servAddr, FILE* fp);
+void recieveFileSelectiveR2(int sock, struct sockaddr_in servAddr, FILE* fp);
 
-int acks[SEQNUM] = {0};
 int windowSize = 1;
+int seq_num;
+int file_size_recv;
 
 int main(int argc, char *argv[]) {
 
@@ -27,150 +29,319 @@ int main(int argc, char *argv[]) {
     char *servlP;
     char * fileName;
 
-    struct input_client inpt = read_input("Client/client.in");
+    struct input_client inpt = read_input("Client1/client.in");
 
     servlP = inpt.addr;
+    strtok(servlP, "\n");
     servPort = inpt.portServer;
     clientPort = inpt.portClient;
     fileName = inpt.file_name;
+    printStr("The file before :");
+    printStr(inpt.file_name);
     windowSize = inpt.window_size;
 
-    if ((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
+    //IPPROTO_UDP
+    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
         DieWithError(" socket () failed");
 
     /* Construct the server address structure */
     memset(&servAddr, 0, sizeof(servAddr));
     servAddr.sin_family = AF_INET;
-    servAddr.sin_addr.s_addr = inet_addr(servlP);
     servAddr.sin_port = htons(servPort);
+    servAddr.sin_addr.s_addr = inet_addr(servlP);
 
-    if ((bind(sock, (struct sockaddr *) &servAddr, sizeof(servAddr))) < 0) {
+    /* Construct the client address structure */
+    memset(&clintAddr, 0, sizeof(clintAddr));
+    clintAddr.sin_family = AF_INET;
+    clintAddr.sin_port = htons(clientPort);
+    clintAddr.sin_addr.s_addr = inet_addr(servlP);
+
+    if ((bind(sock, (struct sockaddr *) &clintAddr, sizeof(clintAddr))) < 0) {
         DieWithError("Error while binding");
         exit(0);
     }
 
-    recieveFileSelectiveR(sock, servAddr, fileName);
+    printStr("Sending File Name and Wait");
+    printStr(inpt.file_name);
+    strtok(fileName, "\n");
+    //Send File name and wait response
+    file_size_recv = fileNameSendAndWait(sock, servAddr, fileName);
+
+    printStr("Response of File name Recieved");
+
+    seq_num = 3 * windowSize;
+
+    char fileNew[MAXNAME] = "Client1/";
+    strtok (fileName,"/");
+    char * na = strtok(NULL, "\n");
+    strncat(fileNew, na, strlen(na) + 1);
+
+    FILE *fp = fopen(fileNew, "w");
+
+    if (fp == NULL)
+        perror("Failed to write to file");
+
+    //stopAndWait(sock, servAddr, fp);
+    recieveFileSelectiveR(sock, servAddr, fp);
+    //gbn(sock, servAddr, fp);
 
     close(sock);
     exit(0);
 }
 
 void check_index(int base, int next_seq) {
-    if (next_seq >= base && next_seq < base+windowSize)
-        return;
-    else if(next_seq >= base - windowSize && next_seq < base)
-        return;
-    else
-        DieWithError("The Seq num is Invalid");
+    if (base + windowSize < seq_num && next_seq > base + windowSize){
+        DieWithError("Error in seq num");
+    }
+
+    if (base + windowSize >= seq_num && next_seq > (base + windowSize)%seq_num && next_seq < base ){
+        DieWithError("Error in seq num");
+    }
 }
 
-void recieveFileSelectiveR(int sock, struct sockaddr_in servAddr, char * fileName) {
-    char fileNew[MAXNAME] = "Client/";
-    strtok (fileName,"/");
-    char * na = strtok(NULL, "\n");
-    strncat(fileNew, na, strlen(na) + 1);
-    printStr(fileNew);
-
-    //Send File name and wait response
-    int num_packets = fileNameSendAndWait(sock, servAddr, fileNew);
-
-    FILE *fp = fopen(fileNew, "w");
-    struct packet packet;
+void recieveFileSelectiveR(int sock, struct sockaddr_in servAddr, FILE* fp) {
+    int current_seq;
     int base = 0;
-    int next_seq;
-    char buffer[SEQNUM * DATASIZE] = {0};
+    struct packet packet;
+    char buffer[seq_num * DATASIZE];
+    int acks[seq_num];
 
     while (1) {
-
         int si = sizeof(servAddr);
-
+        printStr("Wait Recieving the packet");
         //BLOCK until recieve the Packet
         recvfrom(sock, &packet, sizeof(struct packet), 0, (struct sockaddr *) &servAddr, &si);
 
-        next_seq = packet.seqno;
+        printStr("Recieved the packet");
 
-        //TODO: Checl Checksum
-        uint16_t current_check = crc16(packet.data, strlen(packet.data));
+        current_seq = packet.seqno;
+
+        //TODO:Check sum
+        /*uint16_t current_check = crc16(packet.data, strlen(packet.data));
         if (current_check != packet.cksum) {
+            //Send it again please
             sendACK(next_seq, sock, servAddr);
             continue;
+        }*/
+
+        printStr("Check the index");
+        //check_index(base, current_seq);
+        printStr("After Check the index");
+
+        if (current_seq == base) {
+            //Inorder recv
+            printStr("Inorder");
+            printStr("Send ACK");
+            printNum(current_seq);
+            sendACK(current_seq, sock, servAddr);
+            acks[base] = 1;
+
+            memcpy(&(buffer[current_seq * DATASIZE]), &(packet.data), DATASIZE);
+
+            //base * (DATASIZE + file_size_recv)]
+            file_size_recv -= DATASIZE;
+
+            printStr("Print to the file");
+            while (acks[base]) {
+                printStr("PASSS");
+                fwrite(&(buffer[base * DATASIZE]), sizeof(char), DATASIZE, fp);
+                acks[base] = 0;
+                base = (base + 1) % seq_num;
+            }
+
+            printStr("End Print to the file");
+
+        } else if (current_seq > base && current_seq < base+windowSize) {
+            //Out of order recv
+            printStr("Out of order");
+            printStr("Send ACK");
+            printNum(current_seq);
+            sendACK(current_seq, sock, servAddr);
+            acks[current_seq] = 1;
+            memcpy(&(buffer[current_seq * DATASIZE]), &(packet.data), DATASIZE);
+            file_size_recv -= DATASIZE;
+
+        } else if(current_seq >= base - windowSize && current_seq < base) {
+            printStr("Send ack again");
+            sendACK(current_seq, sock, servAddr);
         }
 
-        check_index(base, next_seq);
-
-        if (next_seq >= base && next_seq < base+windowSize) {
-            sendACK(next_seq, sock, servAddr);
-
-            acks[next_seq] = 1;
-
-            memcpy(&(buffer[next_seq]), &(packet.data), DATASIZE);
-
-            num_packets--;
-
-            while (acks[base] && base < SEQNUM) {
-                fwrite(&(buffer[base * DATASIZE]), sizeof(char), DATASIZE, fp);
-                base++;
-            }
-
-            if (num_packets <= 0) {
-                fwrite(&buffer, sizeof(char), DATASIZE * SEQNUM, fp);
-                break;
-            }
-
-        } else if(next_seq >= base - windowSize && next_seq < base)
-            sendACK(next_seq, sock, servAddr);
+        if (file_size_recv <= 0) {
+            break;
+        }
     }
     fclose(fp);
 }
 
-void recieveFileGBN(int sock, struct sockaddr_in servAddr, char * fileName) {
-    char fileNew[MAXNAME] = "Client/";
-    strtok (fileName,"/");
-    char * na = strtok(NULL, "\n");
-    strncat(fileNew, na, strlen(na) + 1);
-    printStr(fileNew);
-    FILE *fp = fopen(fileNew, "w");
-
-    //Send File name and wait response
-    int fileSize = fileNameSendAndWait(sock, servAddr, fileNew);
+void stopAndWait(int sock, struct sockaddr_in servAddr, FILE* fp) {
 
     struct packet packet;
     int base = 0;
     int exp_next_seq = 0;
     int next_seq;
+    int seq_num = 3 * windowSize;
 
     while (1) {
-
         int si = sizeof(servAddr);
+
+        printStr("Wait rec the pack");
         //BLOCK until recieve the Packet
         recvfrom(sock, &packet, sizeof(struct packet), 0, (struct sockaddr *) &servAddr, &si);
 
+        printStr("The pack rec ");
         next_seq = packet.seqno;
+        printNum(next_seq);
+        printStr(packet.data);
 
         //TODO: Check Checksum
-        uint16_t current_check = crc16(packet.data, strlen(packet.data));
+        /*uint16_t current_check = crc16(packet.data, strlen(packet.data));
+        printNumSp(current_check);
+        printNumSp(packet.cksum);
         if (current_check != packet.cksum) {
+            perror("Faild Check sum");
             sendACK(exp_next_seq, sock, servAddr);
             continue;
-        }
-
-        check_index(base, next_seq);
+        }*/
 
         if (next_seq == exp_next_seq) {
+            printStr("Sending the ack of pack");
             sendACK(next_seq, sock, servAddr);
 
-            fwrite(&(packet.data[base * DATASIZE]), sizeof(char), DATASIZE, fp);
+            file_size_recv -= DATASIZE;
 
-            fileSize -= DATASIZE;
+            printStr("Print to the file");
 
-            exp_next_seq++;
+            if (file_size_recv > 0) {
+                fwrite(&(packet.data[base * DATASIZE]), sizeof(char), DATASIZE, fp);
+            } else {
+                fwrite(&(packet.data[base * (DATASIZE + file_size_recv)]), sizeof(char), DATASIZE + file_size_recv, fp);
+            }
 
-            if (fileSize <= 0) {
+            exp_next_seq = (exp_next_seq + 1) % seq_num;
+
+            if (file_size_recv <= 0) {
                 break;
             }
 
-        } else
+        } else {
+            printStr("Error  in the pack send again");
             sendACK(exp_next_seq, sock, servAddr);
+        }
+    }
+    fclose(fp);
+}
+
+void gbn(int sock, struct sockaddr_in servAddr, FILE* fp) {
+
+    struct packet packet;
+    int base = 0;
+    int exp_next_seq = 0;
+    int next_seq;
+    int seq_num = 3 * windowSize;
+
+    while (1) {
+        int si = sizeof(servAddr);
+
+        printStr("Wait rec the pack");
+        //BLOCK until recieve the Packet
+        recvfrom(sock, &packet, sizeof(struct packet), 0, (struct sockaddr *) &servAddr, &si);
+
+        printStr("The pack rec ");
+        next_seq = packet.seqno;
+        printNum(next_seq);
+        printStr(packet.data);
+
+        //TODO: Check Checksum
+        /*uint16_t current_check = crc16(packet.data, strlen(packet.data));
+        printNumSp(current_check);
+        printNumSp(packet.cksum);
+        if (current_check != packet.cksum) {
+            perror("Faild Check sum");
+            sendACK(exp_next_seq, sock, servAddr);
+            continue;
+        }*/
+
+        if (next_seq == exp_next_seq) {
+            printStr("Sending the ack of pack");
+            sendACK(next_seq, sock, servAddr);
+
+            file_size_recv -= DATASIZE;
+
+            printStr("Print to the file");
+
+            if (file_size_recv > 0) {
+                fwrite(&(packet.data[base * DATASIZE]), sizeof(char), DATASIZE, fp);
+            } else {
+                fwrite(&(packet.data[base * (DATASIZE + file_size_recv)]), sizeof(char), DATASIZE + file_size_recv, fp);
+            }
+
+            exp_next_seq = (exp_next_seq + 1) % seq_num;
+
+            if (file_size_recv <= 0) {
+                break;
+            }
+
+        } else {
+            printStr("Error  in the pack send again");
+            sendACK(exp_next_seq, sock, servAddr);
+        }
+    }
+    fclose(fp);
+}
+
+void recieveFileSelectiveR2(int sock, struct sockaddr_in servAddr, FILE* fp) {
+    struct packet packet;
+    int base = 0;
+    int exp_next_seq = 0;
+    int next_seq;
+    int seq_num = 3 * windowSize;
+
+    while (1) {
+        int si = sizeof(servAddr);
+
+        printStr("Wait rec the pack");
+        //BLOCK until recieve the Packet
+        recvfrom(sock, &packet, sizeof(struct packet), 0, (struct sockaddr *) &servAddr, &si);
+
+        printStr("The pack rec ");
+        next_seq = packet.seqno;
+        printNum(next_seq);
+        printStr(packet.data);
+
+        //TODO: Check Checksum
+        /*uint16_t current_check = crc16(packet.data, strlen(packet.data));
+        printNumSp(current_check);
+        printNumSp(packet.cksum);
+        if (current_check != packet.cksum) {
+            perror("Faild Check sum");
+            sendACK(exp_next_seq, sock, servAddr);
+            continue;
+        }*/
+
+        if (next_seq == exp_next_seq) {
+            printStr("Sending the ack of pack");
+            sendACK(next_seq, sock, servAddr);
+
+            file_size_recv -= DATASIZE;
+
+            printStr("Print to the file");
+
+            if (file_size_recv > 0) {
+                fwrite(&(packet.data[base * DATASIZE]), sizeof(char), DATASIZE, fp);
+            } else {
+                fwrite(&(packet.data[base * (DATASIZE + file_size_recv)]), sizeof(char), DATASIZE + file_size_recv, fp);
+            }
+
+            exp_next_seq = (exp_next_seq + 1) % seq_num;
+
+            if (file_size_recv <= 0) {
+                break;
+            }
+
+        } else {
+            printStr("Error  in the pack send again");
+            sendACK(exp_next_seq, sock, servAddr);
+        }
     }
     fclose(fp);
 }
@@ -202,7 +373,7 @@ struct input_client read_input(char * file_path) {
     while ((getline(&line, &len, fp)) != -1) {
         switch (counter) {
             case 0:
-                fromPointerToArray(line, inpt.addr);
+                strncpy(inpt.addr, line, len);
                 break;
             case 1:
                 inpt.portServer = atoi(line);
@@ -211,6 +382,8 @@ struct input_client read_input(char * file_path) {
                 inpt.portClient = atoi(line);
                 break;
             case 3:
+                printStr("The line is :");
+                printStr(line);
                 strncpy(inpt.file_name, line, len);
                 break;
             case 4:
@@ -233,7 +406,9 @@ int fileNameSendAndWait(int sock, struct sockaddr_in servAddr, char * fileNew) {
     filename.seqno = 0;
     filename.cksum = CHKSUM;
     strncpy(filename.data, fileNew, strlen(fileNew));
-    if (sendto(sock, &filename, sizeof(struct packet), 0, (struct sockaddr*) &servAddr, sizeof(servAddr)))
+
+
+    if (sendto(sock, &filename, sizeof(struct packet), 0, (struct sockaddr*) &servAddr, sizeof(servAddr)) < 0)
         perror("ERROR couldn't send File Name");
 
 
@@ -247,7 +422,7 @@ int fileNameSendAndWait(int sock, struct sockaddr_in servAddr, char * fileNew) {
     /* Listen to the input descriptor */
     FD_SET(sock, &sckt_set);
 
-    printf("Start timeout provision ");
+    printStr("Start timeout provision ");
 
     /* Listening for input stream for any activity */
     while(1){
@@ -263,11 +438,10 @@ int fileNameSendAndWait(int sock, struct sockaddr_in servAddr, char * fileNew) {
         } else if (ready_for_reading) {
             recvfrom(sock, &ackRecv, sizeof(struct ack_packet), 0, (struct sockaddr *) &servAddr, &si);
             sendACK(ackRecv.ackno, sock, servAddr);
-
             return ackRecv.ackno;
         } else {
             printf(" Timeout - server not responding - resending all data \n");
-            if (sendto(sock, &filename, sizeof(struct packet), 0, (struct sockaddr*) &servAddr, sizeof(servAddr)))
+            if (sendto(sock, &filename, sizeof(struct packet), 0, (struct sockaddr*) &servAddr, sizeof(servAddr)) < 0)
                 perror("ERROR couldn't send File Name");
             continue;
         }

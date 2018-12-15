@@ -1,11 +1,7 @@
 /* Data-only packets */
 #define DATASIZE 500
 #define HEADERSIZE 8
-#define DEFPORT 8080
-#define MAXCOMNDNUM 100
 #define MAXNAME 1000
-#define SEQNUM 100
-//#define MAXWINDSIZE 15     //The window size must be less than half the sequence nunmber
 #define TIMOUT 5000000    //50 microsecond
 #define CHKSUM 65535
 
@@ -48,11 +44,18 @@ struct input_server {
 };
 
 void printStr(char * str) {
-    printf("The String is %s\n",str);
+    printf("%s\n",str);
+}
+
+void printStrSp(char * str) {
+    printf("%s\n",str);
+}
+void printNumSp(int num) {
+    printf("%d\n",num);
 }
 
 void printNum(int num) {
-    printf("The Number is %d\n",num);
+    printf("%d\n",num);
 }
 
 void DieWithError(char *errorMessage)
