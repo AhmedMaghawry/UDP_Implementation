@@ -44,7 +44,7 @@ struct input_server {
 };
 
 void printStr(char * str) {
-    printf("%s\n",str);
+    //printf("%s\n",str);
 }
 
 void printStrSp(char * str) {
@@ -55,7 +55,7 @@ void printNumSp(int num) {
 }
 
 void printNum(int num) {
-    printf("%d\n",num);
+    //printf("%d\n",num);
 }
 
 void DieWithError(char *errorMessage)

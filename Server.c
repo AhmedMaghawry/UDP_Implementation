@@ -145,10 +145,10 @@ void beginProcess(int fileSize, int sock, struct sockaddr_in clientAddr, char * 
 
     //TODO: Real work start later
 
-    selectiveRepeat(filename, sock, clientAddr, fileSize);
+    //selectiveRepeat(filename, sock, clientAddr, fileSize);
     //stopAndWait(filename, sock, clientAddr, fileSize);
     //gbn(filename, sock, clientAddr, fileSize);
-    //selectiveRepeat2(filename, sock, clientAddr, fileSize);
+    selectiveRepeat2(filename, sock, clientAddr, fileSize);
 }
 
 void sendACK(int next_seq, int sock, struct sockaddr_in addr) {
@@ -293,12 +293,12 @@ void stopAndWait(char* file_path, int sock, struct sockaddr_in clientAddr, int f
         pck.len = DATASIZE + HEADERSIZE;
         pck.seqno =  index;
 
-        printStrSp("May Here1 ");
+        printStr("May Here1 ");
         memcpy(pck.data, buffer + (index * DATASIZE), DATASIZE);
         printStr(pck.data);
 
         pck.cksum = crc16(pck.data, strlen(pck.data));
-        printStrSp("May Here2");
+        printStr("May Here2");
 
         //LOSS Simulation
         float random = ((float)rand()/(float)(RAND_MAX));
@@ -308,13 +308,13 @@ void stopAndWait(char* file_path, int sock, struct sockaddr_in clientAddr, int f
         if (random > plp)
             sendto(sock, (void *)&(pck), sizeof(struct packet), 0, (struct sockaddr*) &clientAddr, sizeof(clientAddr));
 
-        printStrSp(pck.data);
+        printStr(pck.data);
 
         //TODO:Timer Hamdling A reda
 
         struct ack_packet ackPck;
         int ss = sizeof(clientAddr);
-        printStrSp("Waiting Rec ack");
+        printStr("Waiting Rec ack");
         //Blocking Recieve for ACK
         recvfrom(sock, &ackPck, sizeof(struct ack_packet), 0, (struct sockaddr*) &clientAddr, &ss);
         printStrSp("Ack Recieved");
@@ -340,7 +340,7 @@ void stopAndWait(char* file_path, int sock, struct sockaddr_in clientAddr, int f
             bufferSize = remSize;
         }
     }
-    printStrSp("Finished");
+    printStr("Finished");
 }
 
 void gbn(char* file_path, int sock, struct sockaddr_in clientAddr, int fileSize) {
@@ -474,8 +474,11 @@ void selectiveRepeat2(char* file_path, int sock, struct sockaddr_in clientAddr, 
             printStr("Send a pck");
             printNum(pck.seqno);
             printStr(pck.data);
-            if (random > plp)
-                sendto(sock, (void *)&(pck), sizeof(struct packet), 0, (struct sockaddr*) &clientAddr, sizeof(clientAddr));
+
+            if (random > plp) {
+                sendto(sock, (void *) &(pck), sizeof(struct packet), 0, (struct sockaddr *) &clientAddr,
+                       sizeof(clientAddr));
+            }
 
             //TODO:Timer Hamdling A reda
 
@@ -493,11 +496,11 @@ void selectiveRepeat2(char* file_path, int sock, struct sockaddr_in clientAddr, 
 
         struct ack_packet ackPck;
         int ss = sizeof(clientAddr);
-        printStrSp("Waiting Rec ack");
+        printStr("Waiting Rec ack ");
         //Blocking Recieve for ACK
         recvfrom(sock, &ackPck, sizeof(struct ack_packet), 0, (struct sockaddr*) &clientAddr, &ss);
         printStrSp("Ack Recieved");
-        printNum(ackPck.ackno);
+        printNumSp(ackPck.ackno);
         if (ackPck.ackno == base) {
             acks[ackPck.ackno] = 1;
             while (acks[base]) {
@@ -525,5 +528,5 @@ void selectiveRepeat2(char* file_path, int sock, struct sockaddr_in clientAddr, 
             bufferSize = remSize;
         }
     }
-    printStrSp("Finished");
+    printStr("Finished");
 }

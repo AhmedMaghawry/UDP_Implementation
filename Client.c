@@ -67,7 +67,7 @@ int main(int argc, char *argv[]) {
     //Send File name and wait response
     file_size_recv = fileNameSendAndWait(sock, servAddr, fileName);
 
-    printStr("Response of File name Recieved");
+    printStr("Response of File name Recieved ");
 
     seq_num = 3 * windowSize;
 
