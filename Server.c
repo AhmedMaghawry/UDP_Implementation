@@ -14,6 +14,7 @@ void selectiveRepeat(char* file_path, int sock, struct sockaddr_in clientAddr, i
 void stopAndWait(char* file_path, int sock, struct sockaddr_in clientAddr, int fileSize);
 void gbn(char* file_path, int sock, struct sockaddr_in clientAddr, int fileSize);
 void selectiveRepeat2(char* file_path, int sock, struct sockaddr_in clientAddr, int fileSize);
+void selectiveRepeat3(char* file_path, int sock, struct sockaddr_in clientAddr, int fileSize);
 
 int servSock;
 int clntSock;
@@ -149,6 +150,7 @@ void beginProcess(int fileSize, int sock, struct sockaddr_in clientAddr, char * 
     //stopAndWait(filename, sock, clientAddr, fileSize);
     //gbn(filename, sock, clientAddr, fileSize);
     selectiveRepeat2(filename, sock, clientAddr, fileSize);
+    //selectiveRepeat3(filename, sock, clientAddr, fileSize);
 }
 
 void sendACK(int next_seq, int sock, struct sockaddr_in addr) {
@@ -440,7 +442,7 @@ void selectiveRepeat2(char* file_path, int sock, struct sockaddr_in clientAddr, 
     struct packet packBuff[seq_number];
     int bufferSize = DATASIZE * seq_number;
 
-    int window = max_window_size;
+    int window = 1;
     int base  = 0;
     int nextSeq = 0;
 
@@ -502,6 +504,10 @@ void selectiveRepeat2(char* file_path, int sock, struct sockaddr_in clientAddr, 
         printStrSp("Ack Recieved");
         printNumSp(ackPck.ackno);
         if (ackPck.ackno == base) {
+            if (window * 2 <= max_window_size)
+                window *= 2;
+            else
+                window = max_window_size;
             acks[ackPck.ackno] = 1;
             while (acks[base]) {
                 printStr("Start the party");
@@ -511,7 +517,160 @@ void selectiveRepeat2(char* file_path, int sock, struct sockaddr_in clientAddr, 
                 printNum(base);
             }
         } else if(ackPck.ackno > base && ackPck.ackno < base + window) {
+            if(!acks[ackPck.ackno]) {
+                if (window * 2 <= max_window_size)
+                    window *= 2;
+                else
+                    window = max_window_size;
+                acks[ackPck.ackno] = 1;
+            } else if(acks[ackPck.ackno] < 3) {
+                acks[ackPck.ackno]++;
+            } else {
+                window /= 2;
+            }
+        }
+
+        if (bufferSize == 0 && remSize > DATASIZE) {
+            memset(buffer, 0, seq_number * DATASIZE);
+            memset(acks, 0, seq_number);
+            fread(buffer, DATASIZE, seq_number, fp);
+            printStr("Buffer Filled 1");
+            bufferSize = DATASIZE * seq_number;
+        } else if(bufferSize == 0 && remSize > 0) {
+            memset(buffer, 0, seq_number * DATASIZE);
+            memset(acks, 0, seq_number);
+            fread(buffer, remSize, 1, fp);
+            printStr("Buffer Filled 2");
+            bufferSize = remSize;
+        }
+    }
+    printStr("Finished");
+}
+
+void selectiveRepeat3(char* file_path, int sock, struct sockaddr_in clientAddr, int fileSize) {
+    FILE * fp;
+    int remSize = fileSize;
+    int simLoss = 0;
+
+    printStr("Start Sending");
+
+    fp = fopen(file_path, "r");
+    if (fp == NULL) {
+        DieWithError("File not Found");
+    }
+
+    int seq_number = 3 * max_window_size;
+    char buffer[DATASIZE * seq_number];
+    int acks[seq_number];
+    struct packet packBuff[seq_number];
+    int bufferSize = DATASIZE * seq_number;
+    int lossArr[] = {50,60,30};
+    int lossLen = sizeof(lossArr);
+    int lossIndex = 0;
+    int lossVal = lossArr[lossIndex];
+
+    int window = 1;
+    int base  = 0;
+    int nextSeq = 0;
+
+    if (fread(buffer, DATASIZE, seq_number, fp) < 0)
+        DieWithError("Cant read the file");
+
+    for(; remSize > 0;) {
+
+        printStr("Before For");
+        printNum(seq_number);
+        printNum(nextSeq);
+        printNum(base + window);
+        for (int i = nextSeq; i < base + window && bufferSize > 0; i = (i + 1) % seq_number) {
+            printStr("After For");
+            printStr("The Next Seq :");
+            printNum(i);
+
+            struct packet pck;
+            memset(&pck, 0, sizeof(pck));
+            pck.len = DATASIZE + HEADERSIZE;
+            pck.seqno = i;
+
+            memcpy(pck.data, buffer + (i * DATASIZE), DATASIZE);
+
+            pck.cksum = crc16(pck.data, strlen(pck.data));
+            packBuff[nextSeq] = pck;
+
+            //LOSS Simulation
+            float random = ((float)rand()/(float)(RAND_MAX));
+
+            printStr("Send a pck");
+            printNum(pck.seqno);
+            printStr(pck.data);
+
+            if (lossVal == 0) {
+                lossIndex++;
+                if (lossIndex < lossLen){
+                    simLoss = 1;
+                    lossVal = lossArr[lossIndex];
+                }
+            } else {
+                simLoss = 0;
+                lossVal--;
+            }
+
+            if (random > plp && !simLoss) {
+                sendto(sock, (void *) &(pck), sizeof(struct packet), 0, (struct sockaddr *) &clientAddr,
+                       sizeof(clientAddr));
+            } else{
+                printStr("Loss Happen to");
+                printNum(pck.seqno);
+            }
+
+            //TODO:Timer Hamdling A reda
+
+            nextSeq = (nextSeq + 1) % seq_number;
+            remSize -= DATASIZE;
+            bufferSize -= DATASIZE;
+
+            printStr("The size of Buffer :");
+            printNum(bufferSize);
+            printStr("The remain Size :");
+            printNum(remSize);
+            printStr("The base is :");
+            printNum(base);
+        }
+
+        struct ack_packet ackPck;
+        int ss = sizeof(clientAddr);
+
+            printStr("Waiting Rec ack ");
+            //Blocking Recieve for ACK
+            recvfrom(sock, &ackPck, sizeof(struct ack_packet), 0, (struct sockaddr *) &clientAddr, &ss);
+            printStr("Ack Recieved");
+            printNum(ackPck.ackno);
+
+        if (ackPck.ackno == base) {
+            if (window * 2 <= max_window_size)
+                window *= 2;
+            else
+                window = max_window_size;
             acks[ackPck.ackno] = 1;
+            while (acks[base]) {
+                printStr("Start the party");
+                acks[base] = 0;
+                base = (base + 1) % seq_number;
+                printStr("The new base :");
+                printNum(base);
+            }
+        } else if(ackPck.ackno > base && ackPck.ackno < base + window) {
+            if(!acks[ackPck.ackno]) {
+                if (window * 2 <= max_window_size)
+                    window *= 2;
+                else
+                    window = max_window_size;
+                acks[ackPck.ackno] = 1;
+            } else if(acks[ackPck.ackno] < 3) {
+                acks[ackPck.ackno]++;
+            } else {
+                window /= 2;
+            }
         }
 
         if (bufferSize == 0 && remSize > DATASIZE) {
